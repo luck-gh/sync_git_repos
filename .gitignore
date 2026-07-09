@@ -1,1 +1,38 @@
-﻿logs/*
+# ---- 本项目产物 ----
+logs/                    # 运行时生成的同步日志(sync-repos-*.log)
+_repro/                  # 调试/复现用的临时仓库(如有)
+*.log
+
+# ---- Python 字节码 / 缓存 ----
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- 虚拟环境 ----
+.venv/
+venv/
+env/
+ENV/
+
+# ---- 打包 / 分发 ----
+build/
+dist/
+*.egg-info/
+*.egg
+
+# ---- 编辑器 / IDE ----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---- 操作系统 ----
+.DS_Store
+Thumbs.db
+desktop.ini

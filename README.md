@@ -8,6 +8,7 @@
 
 - **一次扫一整个目录**：递归查找所有含 `.git` 的仓库，自动跳过 `node_modules`、`.venv`、`__pycache__` 等目录。
 - **并行 fetch + 进度条**：`fetch` 是网络 IO，默认用 8 个线程并发，总耗时约等于最慢的那个仓库，而不是所有仓库之和；检查阶段带实时进度条。
+- **卡住的仓库不拖累全局**：所有 git 网络操作都禁用交互式等待（缺凭证 / 未确认 host key 会直接失败而非挂起），并对 `fetch` / `push` 设了超时；某个仓库卡住会被跳过并记录原因，其他仓库照常进行。
 - **先检查再执行**：阶段一只做只读的 `fetch` 和分析，输出状态表；阶段二才动手，且默认需要人工确认。
 - **同时支持 origin 和 upstream**：fork 场景下能识别 `upstream`，并可在同步 upstream 后自动推回 `origin`，让 GitHub 上的 fork 也保持最新。
 - **安全默认 + 强制模式**：默认遇到脏工作区或远程分叉会跳过、不动现场；加 `--force` 才会自动 stash、自动合并。
@@ -49,6 +50,7 @@ python sync_git_repos.py D:\code --mode push --force  # 强制推送(含分叉�
 python sync_git_repos.py D:\code --dry-run            # 只打印会执行的命令,不实际跑
 python sync_git_repos.py D:\code --yes                # 跳过确认提示,直接执行
 python sync_git_repos.py D:\code --workers 16         # 仓库很多时调大并发线程数
+python sync_git_repos.py D:\code --fetch-timeout 15   # 单个仓库 fetch 超过 15s 就跳过
 ```
 
 ### 选项说明
@@ -62,6 +64,7 @@ python sync_git_repos.py D:\code --workers 16         # 仓库很多时调大并
 | `--force` / `-f` | 关 | 强制模式，详见下文 |
 | `--push-after-upstream-sync` | 关 | pull 模式下，合并完 upstream 后若本地领先 origin，自动推回 origin |
 | `--workers N` | `8` | 并行 fetch 的线程数，仓库多时可调大；设为 `0` 关闭多线程，改用单线程串行 |
+| `--fetch-timeout SEC` | `30` | 单个仓库 fetch 的最长等待秒数，超时则跳过该仓库，不影响其他仓库 |
 | `--log-dir DIR` | 脚本目录下的 `logs/` | 执行日志输出目录 |
 
 ## 工作流程
@@ -83,7 +86,7 @@ another-repo                   dev          0/2                无 upstream     
 
 `origin(落后/领先)` 中，**落后** = 远程有本地没有的提交数（需要拉取），**领先** = 本地有远程没有的提交数（需要推送）。
 
-仓库会按需要关注的程度分组排序：分叉 > 需推送 > 需拉取 > 仅工作区不干净 > 无需操作 > 跳过。
+仓库会按需要关注的程度分组排序：fetch 超时 > 分叉 > 需推送 > 需拉取 > 仅工作区不干净 > 无需操作 > 跳过。
 
 ### 阶段二：执行（需确认）
 
@@ -124,6 +127,27 @@ another-repo                   dev          0/2                无 upstream     
 ```
 logs/sync-repos-<mode>-<时间戳>.log
 ```
+
+## 仓库卡住 / fetch 迟迟不动怎么办
+
+检查阶段进度条停在 `18/20` 这类中间值不动，通常是某个仓库的 `git fetch` 挂住了。本工具已从两方面兜底，让卡住的仓库不拖累其他仓库：
+
+- **禁用交互式等待**：所有 git 网络操作都设了 `GIT_TERMINAL_PROMPT=0`、`GCM_INTERACTIVE=Never` 和 `ssh -oBatchMode=yes`。缺少凭证、密码或未确认 host key 时会**直接失败**，而不是卡在那里等你输入。
+- **超时兜底**：即便远程无响应、连接没断，`fetch` 超过 `--fetch-timeout`（默认 30s）也会被中止，该仓库标记为超时并跳过，其他仓库照常进行。push 同样有超时兜底。
+
+超时的仓库会在状态表最上方单独归为一组：
+
+```
+--- fetch 超时,已跳过(可调大 --fetch-timeout 重试) ---
+slow-repo                      main         -                  -                    fetch origin 超时(>30s),已跳过
+```
+
+处理办法：
+
+1. **网络慢或仓库大**：调大超时，例如 `--fetch-timeout 120`。
+2. **想更快看到结果**：调小超时快速筛出卡住的仓库，例如 `--fetch-timeout 10`，之后单独处理它们。
+3. **怀疑是并发或某个仓库本身的问题**：用 `--workers 0` 关闭多线程，改为单线程串行，逐个仓库跑更容易定位是哪一个、卡在哪一步。
+4. **确认是凭证问题**：单独进那个仓库手动跑一次 `git fetch`，把凭证配好（如配置 SSH key 或凭证管理器）后再重跑。
 
 ## 建议用法
 
