@@ -14,8 +14,8 @@ from pathlib import Path
 # fetch/push 等网络操作卡住时用的超时返回码(借用 shell 里 timeout 的惯例值 124)
 GIT_TIMEOUT_RETURNCODE = 124
 
-# push 网络操作的超时秒数(push 大仓库可能比 fetch 久, 给宽松一些; 主要防挂死, 不是限速)
-PUSH_TIMEOUT = 120
+# fetch/push 网络操作的默认超时秒数
+DEFAULT_TIMEOUT = 30
 
 # 杀进程树后, 收尾读取管道最多再等这么久(树已被杀, 正常会立即 EOF; 只为极端情况兜底)
 _KILL_DRAIN_TIMEOUT = 5
@@ -50,6 +50,47 @@ def _kill_process_tree(pid: int) -> None:
             os.killpg(os.getpgid(pid), signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
             pass
+
+
+# 诊断超时用的 TCP 连通性探测超时(秒): 短一点, 只为区分"连不上" vs "连得上但慢"
+PROBE_TIMEOUT = 5
+
+
+def parse_remote_endpoint(url: str) -> tuple[str | None, int]:
+    """从 git remote URL 解析出 (host, port), 用于超时后探测连通性。
+
+    支持 https/http/ssh/git 协议 URL, 以及 scp 式 user@host:path。
+    本地路径 / file:// / 无法解析时返回 (None, 0)。
+    """
+    import re
+    from urllib.parse import urlparse
+
+    url = url.strip()
+    if "://" in url:
+        p = urlparse(url)
+        default_port = {"http": 80, "https": 443, "ssh": 22, "git": 9418}.get(p.scheme or "")
+        if p.scheme == "file" or default_port is None:
+            return (None, 0)
+        return (p.hostname, p.port or default_port)
+
+    # Windows 盘符(C:\...)不是 scp 语法, 排除
+    if len(url) >= 2 and url[1] == ":":
+        return (None, 0)
+    # scp 式: [user@]host:path -> 走 SSH(22)
+    m = re.match(r"^(?:[^@/]+@)?([^:/]+):", url)
+    if m:
+        return (m.group(1), 22)
+    return (None, 0)
+
+
+def tcp_probe(host: str, port: int, timeout: float = PROBE_TIMEOUT) -> bool:
+    """尝试 TCP 连接 host:port。通了返回 True, 连不上(超时/拒绝/DNS 失败)返回 False。"""
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 def run_command(cmd: list[str], cwd: Path, env: dict,
@@ -118,6 +159,10 @@ class GitRepo:
 
     def remote_exists(self, remote: str) -> bool:
         return self.run(["remote", "get-url", remote]).returncode == 0
+
+    def remote_url(self, remote: str) -> str | None:
+        r = self.run(["remote", "get-url", remote])
+        return r.stdout.strip() if r.returncode == 0 else None
 
     def is_clean_worktree(self) -> bool:
         result = self.run(["status", "--porcelain"])

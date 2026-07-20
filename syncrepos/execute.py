@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .analyze import RepoAnalysis
 from .force_ops import ForceOps
-from .gitcmd import GIT_TIMEOUT_RETURNCODE, PUSH_TIMEOUT, GitRepo
+from .gitcmd import DEFAULT_TIMEOUT, GIT_TIMEOUT_RETURNCODE, GitRepo
 
 
 @dataclass
@@ -30,7 +30,8 @@ class ExecResult:
 
     @classmethod
     def pull(cls, a: RepoAnalysis, dry_run: bool, force: bool,
-             push_after_upstream_sync: bool) -> "ExecResult":
+             push_after_upstream_sync: bool,
+             timeout: float | None = DEFAULT_TIMEOUT) -> "ExecResult":
         repo = GitRepo(a.path)
         ops = ForceOps(repo)
         branch = a.branch
@@ -73,7 +74,8 @@ class ExecResult:
                     final = "CONFLICT_RESOLVED" if final == "OK" else final
 
                 if push_after_upstream_sync and status in ("OK", "CONFLICT_RESOLVED"):
-                    push_msg = cls._maybe_push_after_upstream_sync(repo, branch, dry_run)
+                    push_msg = cls._maybe_push_after_upstream_sync(
+                        repo, branch, dry_run, timeout)
                     if push_msg:
                         msgs.append(push_msg)
 
@@ -89,7 +91,8 @@ class ExecResult:
         return cls(a.path, final, "; ".join(msgs))
 
     @staticmethod
-    def _maybe_push_after_upstream_sync(repo: GitRepo, branch: str, dry_run: bool) -> str | None:
+    def _maybe_push_after_upstream_sync(repo: GitRepo, branch: str, dry_run: bool,
+                                        timeout: float | None = DEFAULT_TIMEOUT) -> str | None:
         """upstream 合并完成后, 如果本地相对 origin 变成领先(无落后), 就推回 origin, 让 GitHub 上的 fork 也同步。
         返回一句说明, 没有需要推送的情况返回 None。
         """
@@ -101,11 +104,12 @@ class ExecResult:
             return None
         behind, ahead = ob
         if ahead > 0 and behind == 0:
-            r = repo.run(["push", "origin", branch], timeout=PUSH_TIMEOUT)
+            r = repo.run(["push", "origin", branch], timeout=timeout)
             if r.returncode == 0:
                 return f"已将 upstream 同步结果推送到 origin (领先 {ahead} 个提交,fork 已更新)"
             elif r.returncode == GIT_TIMEOUT_RETURNCODE:
-                return f"推送到 origin 超时(>{PUSH_TIMEOUT}s),已跳过"
+                assert timeout is not None
+                return f"推送到 origin 超时(>{timeout:.0f}s),已跳过"
             else:
                 return "推送到 origin 失败: " + r.stderr.strip()[:150]
         return None
@@ -113,7 +117,8 @@ class ExecResult:
     # ----- 工厂: push -----------------------------------------------------
 
     @classmethod
-    def push(cls, a: RepoAnalysis, dry_run: bool, force: bool) -> "ExecResult":
+    def push(cls, a: RepoAnalysis, dry_run: bool, force: bool,
+             timeout: float | None = DEFAULT_TIMEOUT) -> "ExecResult":
         repo = GitRepo(a.path)
         ops = ForceOps(repo)
         branch = a.branch
@@ -152,13 +157,14 @@ class ExecResult:
             msgs.append(f"[dry-run] git push origin {branch}")
             return cls(a.path, "OK", "; ".join(msgs))
 
-        push_r = repo.run(["push", "origin", branch], timeout=PUSH_TIMEOUT)
+        push_r = repo.run(["push", "origin", branch], timeout=timeout)
         if push_r.returncode == 0:
             msgs.append(f"已推送到 origin/{branch}")
             final = "CONFLICT_RESOLVED" if diverged else "OK"
             return cls(a.path, final, "; ".join(msgs))
         elif push_r.returncode == GIT_TIMEOUT_RETURNCODE:
-            msgs.append(f"推送超时(>{PUSH_TIMEOUT}s),已跳过")
+            assert timeout is not None
+            msgs.append(f"推送超时(>{timeout:.0f}s),已跳过")
             return cls(a.path, "FAILED", "; ".join(msgs))
         else:
             msgs.append("推送失败: " + push_r.stderr.strip()[:150])
@@ -167,13 +173,16 @@ class ExecResult:
     # ----- 批量展示: 一批结果的结果表 -------------------------------------
 
     @classmethod
-    def print_table(cls, results: list["ExecResult"]) -> list[str]:
+    def print_table(cls, results: list["ExecResult"],
+                    repo_index: dict) -> list[str]:
         """打印结果表, 返回可写入日志的文本行。"""
         print("\n================ 执行结果 ================")
-        lines = [f"{'仓库':<30} {'状态':<18} 详情"]
+        lines = [f"{'序号+仓库':<33} {'状态':<18} 详情"]
         print(lines[0])
         for r in results:
-            line = f"{r.path.name:<30} {r.status:<18} {r.detail}"
+            idx = repo_index.get(r.path, 0)
+            label = f"[{idx:>2}] {r.path.name:<28}"
+            line = f"{label} {r.status:<18} {r.detail}"
             print(line)
             lines.append(line)
         return lines

@@ -17,7 +17,7 @@ from pathlib import Path
 
 from .analyze import RepoAnalysis
 from .execute import ExecResult
-from .gitcmd import PUSH_TIMEOUT, GitRepo
+from .gitcmd import DEFAULT_TIMEOUT, GitRepo
 from .progress import MultiProgress, ProgressBar
 from .scan import RepoScanner
 from .tee_log import tee_to_file
@@ -55,8 +55,12 @@ class SyncApp:
             return
 
         print(f"\n发现 {len(repos)} 个仓库:")
-        for repo in sorted(repos, key=lambda p: str(p).lower()):
-            print(f"  - {repo.name:<30} {repo}")
+        sorted_repos = sorted(repos, key=lambda p: str(p).lower())
+        # 按排序后的顺序分配序号, 后续所有输出都引用同一张表, 同名仓库可靠区分
+        repo_index: dict[Path, int] = {p: i + 1 for i, p in enumerate(sorted_repos)}
+        for repo in sorted_repos:
+            idx = repo_index[repo]
+            print(f"  - [{idx:>2}] {repo.name:<28} {repo}")
 
         # 检查与同步合并成一条龙, 无法先展示差异表再确认, 所以确认前移到开跑前一次
         if not self._confirm_start(len(repos)):
@@ -76,9 +80,9 @@ class SyncApp:
         analyses = [r[0] for r in results if r is not None]
         exec_results = [r[1] for r in results if r is not None and r[1] is not None]
 
-        RepoAnalysis.print_table(analyses)
+        RepoAnalysis.print_table(analyses, repo_index)
         if exec_results:
-            ExecResult.print_table(exec_results)
+            ExecResult.print_table(exec_results, repo_index)
         else:
             print("\n没有仓库需要执行同步(均无远程差异或被跳过)。")
 
@@ -93,10 +97,12 @@ class SyncApp:
         """
         args = self.args
 
-        # 检查阶段: 卡住时最坏就是单次 fetch 超时, 故倒计时上界用 fetch_timeout(而非 2 倍)
-        check_bar.register(repo_path, args.fetch_timeout)
+        # 0 表示不限时: subprocess 和进度条都用 None 表示无截止时间。
+        timeout = None if args.timeout == 0 else args.timeout
+        # 检查阶段卡住时，倒计时上界就是统一的网络操作超时。
+        check_bar.register(repo_path, timeout)
         try:
-            a = RepoAnalysis.analyze(GitRepo(repo_path), fetch_timeout=args.fetch_timeout)
+            a = RepoAnalysis.analyze(GitRepo(repo_path), timeout=timeout)
         except Exception as exc:  # 单个仓库分析异常不应中断整体
             a = self._fallback_analysis(repo_path, exc)
         check_bar.advance(repo_path)
@@ -108,12 +114,14 @@ class SyncApp:
             return (a, None)
 
         # 需要同步: 登记 push 超时用于卡住时倒计时(dry-run 不走网络, 不登记)
-        sync_bar.register(repo_path, None if args.dry_run else PUSH_TIMEOUT)
+        timeout = None if args.timeout == 0 else args.timeout
+        sync_bar.register(repo_path, None if args.dry_run else timeout)
         try:
             if args.mode == "pull":
-                result = ExecResult.pull(a, args.dry_run, args.force, args.push_after_upstream_sync)
+                result = ExecResult.pull(a, args.dry_run, args.force,
+                                         args.push_after_upstream_sync, timeout)
             else:
-                result = ExecResult.push(a, args.dry_run, args.force)
+                result = ExecResult.push(a, args.dry_run, args.force, timeout)
         except Exception as exc:  # 单个仓库执行异常不应中断整体
             result = ExecResult(repo_path, "FAILED", f"执行出错: {str(exc)[:120]}")
         sync_bar.advance(repo_path)
@@ -145,7 +153,10 @@ class SyncApp:
         print(f"模式: {'集体拉取 pull' if args.mode == 'pull' else '集体推送 push'}")
         print(f"多线程模式: {f'开启 {args.workers} 线程' if args.workers > 1 else '关闭多线程 (--workers 设置多线程数量)'}")
         print(f"强制模式: {'开启 (--force)' if args.force else '关闭 (未加 --force,遇脏工作区/分叉将跳过)'}")
-        print(f"fetch 超时: {args.fetch_timeout:.0f}s (超时的仓库将跳过,不影响其他仓库)")
+        if args.timeout == 0:
+            print("网络操作超时: 无限制 (将一直等待 fetch/push 完成)")
+        else:
+            print(f"网络操作超时: {args.timeout:.0f}s (适用于 fetch/push)")
         if args.mode == "pull":
             print(f"upstream 同步后推回 origin: {'开启' if args.push_after_upstream_sync else '关闭'}")
 
@@ -199,9 +210,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workers", type=int, default=8,
                         help="并行处理的线程数(默认 8),每个线程负责一个仓库的检查+同步整条流程;"
                              "仓库多时可适当调大;设为 0 则关闭多线程,改为单线程串行执行")
-    parser.add_argument("--fetch-timeout", type=float, default=30,
-                        help="单个仓库 fetch 的超时秒数(默认 30)。超时的仓库会被跳过并标记,不影响其他仓库;"
-                             "网络慢或仓库大时可调大。配合 GIT_TERMINAL_PROMPT=0 一起避免因等待凭证/host key 而卡死")
+    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT,
+                        help=f"单个仓库 fetch/push 的超时秒数(默认 {DEFAULT_TIMEOUT}),"
+                             "设为 0 则不超时并一直等待")
     return parser
 
 

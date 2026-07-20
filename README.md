@@ -50,7 +50,8 @@ python sync_git_repos.py D:\code --mode push --force  # 强制推送(含分叉�
 python sync_git_repos.py D:\code --dry-run            # 只打印会执行的命令,不实际跑
 python sync_git_repos.py D:\code --yes                # 跳过确认提示,直接执行
 python sync_git_repos.py D:\code --workers 16         # 仓库很多时调大并发线程数
-python sync_git_repos.py D:\code --fetch-timeout 15   # 单个仓库 fetch 超过 15s 就跳过
+python sync_git_repos.py D:\code --timeout 15         # fetch/push 超过 15s 就跳过
+python sync_git_repos.py D:\code --timeout 0          # 网络操作不超时，一直等待
 ```
 
 ### 选项说明
@@ -64,7 +65,7 @@ python sync_git_repos.py D:\code --fetch-timeout 15   # 单个仓库 fetch 超�
 | `--force` / `-f` | 关 | 强制模式，详见下文 |
 | `--push-after-upstream-sync` | 关 | pull 模式下，合并完 upstream 后若本地领先 origin，自动推回 origin |
 | `--workers N` | `8` | 并行 fetch 的线程数，仓库多时可调大；设为 `0` 关闭多线程，改用单线程串行 |
-| `--fetch-timeout SEC` | `30` | 单个仓库 fetch 的最长等待秒数，超时则跳过该仓库，不影响其他仓库 |
+| `--timeout SEC` | `30` | 单个仓库 fetch/push 的最长等待秒数，超时则跳过；设为 `0` 时不超时、一直等待 |
 | `--log-dir DIR` | 脚本目录下的 `logs/` | 执行日志输出目录 |
 
 ## 工作流程
@@ -133,19 +134,19 @@ logs/sync-repos-<mode>-<时间戳>.log
 检查阶段进度条停在 `18/20` 这类中间值不动，通常是某个仓库的 `git fetch` 挂住了。本工具已从两方面兜底，让卡住的仓库不拖累其他仓库：
 
 - **禁用交互式等待**：所有 git 网络操作都设了 `GIT_TERMINAL_PROMPT=0`、`GCM_INTERACTIVE=Never` 和 `ssh -oBatchMode=yes`。缺少凭证、密码或未确认 host key 时会**直接失败**，而不是卡在那里等你输入。
-- **超时兜底**：即便远程无响应、连接没断，`fetch` 超过 `--fetch-timeout`（默认 30s）也会被中止，该仓库标记为超时并跳过，其他仓库照常进行。push 同样有超时兜底。
+- **超时兜底**：即便远程无响应、连接没断，`fetch` 或 `push` 超过 `--timeout`（默认 30s）也会被中止，该仓库标记为超时并跳过，其他仓库照常进行。
 
 超时的仓库会在状态表最上方单独归为一组：
 
 ```
---- fetch 超时,已跳过(可调大 --fetch-timeout 重试) ---
+--- fetch 超时,已跳过(可调大 --timeout 重试) ---
 slow-repo                      main         -                  -                    fetch origin 超时(>30s),已跳过
 ```
 
 处理办法：
 
-1. **网络慢或仓库大**：调大超时，例如 `--fetch-timeout 120`。
-2. **想更快看到结果**：调小超时快速筛出卡住的仓库，例如 `--fetch-timeout 10`，之后单独处理它们。
+1. **网络慢或仓库大**：调大超时，例如 `--timeout 120`。
+2. **想更快看到结果**：调小超时快速筛出卡住的仓库，例如 `--timeout 10`，之后单独处理它们。
 3. **怀疑是并发或某个仓库本身的问题**：用 `--workers 0` 关闭多线程，改为单线程串行，逐个仓库跑更容易定位是哪一个、卡在哪一步。
 4. **确认是凭证问题**：单独进那个仓库手动跑一次 `git fetch`，把凭证配好（如配置 SSH key 或凭证管理器）后再重跑。
 
