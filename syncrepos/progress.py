@@ -13,9 +13,8 @@
 
 两个能力对应的诉求:
   1. 检查与同步同时进行 -> 两个条同时在两行上刷新(MultiProgress 用 ANSI 光标上移重绘整块)。
-  2. 卡住时想知道还要多久 -> 每个在途任务登记一个截止时间(now + timeout), 取最晚的一个,
-     显示"最长约还需 Ns", 也就是最坏情况下本阶段还要多久结束; 到点(git 即将超时被 kill)
-     时显示"即将结束", 而不是一直停在 0s。
+  2. 卡住时想知道还要多久 -> 网络任务登记截止时间(now + timeout), 显示最长剩余时间；
+     到点后明确显示"超时收尾中"。没有硬超时的本地任务则显示仓库名和实际已用时间。
 
 不写日志: 进度条会反复刷新, 若进日志会留下大量重复行。所以统一写 sys.__stderr__
 (真实 stderr, 不受 tee_log 接管), 日志里一行进度条都不会有。
@@ -44,6 +43,7 @@ class ProgressBar:
         self.width = width
         self.done = 0
         self._deadlines: dict[object, float] = {}   # key -> 截止时间(time.monotonic 值)
+        self._started: dict[object, float] = {}     # key -> 开始时间, 本地长操作显示耗时
         self._lock = threading.Lock()
         self._on_change = None                       # 数据变化时通知渲染器立刻重绘
 
@@ -55,9 +55,11 @@ class ProgressBar:
         timeout 为 None 表示该任务不参与倒计时(比如 dry-run 不走网络)。
         应在任务"真正开始执行"时调用(而非提交排队时), 倒计时才准确。
         """
-        if timeout is not None:
-            with self._lock:
-                self._deadlines[key] = time.monotonic() + timeout
+        now = time.monotonic()
+        with self._lock:
+            self._started[key] = now
+            if timeout is not None:
+                self._deadlines[key] = now + timeout
         self._changed()
 
     def advance(self, key: object | None = None) -> None:
@@ -66,6 +68,7 @@ class ProgressBar:
             self.done += 1
             if key is not None:
                 self._deadlines.pop(key, None)
+                self._started.pop(key, None)
         self._changed()
 
     def add_total(self, n: int = 1) -> None:
@@ -94,12 +97,22 @@ class ProgressBar:
 
             suffix = ""
             if not final and done < self.total and self._deadlines:
-                remaining = max(0.0, max(self._deadlines.values()) - time.monotonic())
+                deadline_key, deadline = max(self._deadlines.items(), key=lambda item: item[1])
+                remaining = deadline - time.monotonic()
                 if remaining <= 0.5:
-                    suffix = "  即将结束"          # 估算到点, git 即将超时被 kill
+                    suffix = f"  超时收尾中: {self._key_label(deadline_key)}"
                 else:
                     suffix = f"  最长约还需 {remaining:4.0f}s"
+            elif not final and done < self.total and self._started:
+                active_key, started = min(self._started.items(), key=lambda item: item[1])
+                elapsed = max(0.0, time.monotonic() - started)
+                suffix = f"  正在处理: {self._key_label(active_key)} (已 {elapsed:.0f}s)"
         return f"{self.prefix} [{bar}] {done}/{self.total}{suffix}"
+
+    @staticmethod
+    def _key_label(key: object) -> str:
+        name = getattr(key, "name", None)
+        return str(name if name else key)
 
 
 class MultiProgress:

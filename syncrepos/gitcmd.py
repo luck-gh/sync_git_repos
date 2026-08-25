@@ -20,6 +20,9 @@ DEFAULT_TIMEOUT = 30
 # 杀进程树后, 收尾读取管道最多再等这么久(树已被杀, 正常会立即 EOF; 只为极端情况兜底)
 _KILL_DRAIN_TIMEOUT = 5
 
+# taskkill 自己也属于外部命令, 不能让超时清理流程反过来永久卡在 taskkill 上。
+_TASKKILL_TIMEOUT = 5
+
 
 def _popen_kwargs() -> dict:
     """让子进程可被"连子孙一起杀"的启动参数。
@@ -42,8 +45,11 @@ def _kill_process_tree(pid: int) -> None:
     """
     if os.name == "nt":
         # /T 连子进程树一起杀, /F 强制。进程已退出会返非 0, 忽略即可。
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
-                       capture_output=True)
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                           capture_output=True, timeout=_TASKKILL_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            pass
     else:
         import signal
         try:
@@ -100,24 +106,37 @@ def run_command(cmd: list[str], cwd: Path, env: dict,
     timeout 为 None 表示不限时(本地只读操作)。超时后杀掉进程树并返回
     GIT_TIMEOUT_RETURNCODE, 让卡住的仓库快速失败、不拖累其他仓库。
     """
-    with subprocess.Popen(
+    proc = subprocess.Popen(
         cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace", env=env,
         **_popen_kwargs(),
-    ) as proc:
-        try:
-            stdout, stderr = proc.communicate(timeout=timeout)
-            return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
-        except subprocess.TimeoutExpired:
-            _kill_process_tree(proc.pid)
-            # 树已杀, 管道应立即 EOF; 仍给个上限, 避免极端情况下收尾再次挂死
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+    except subprocess.TimeoutExpired:
+        _kill_process_tree(proc.pid)
+        # taskkill 未能终止父进程时再直接 kill 一次。Git for Windows 的后代进程可能
+        # 已脱离原父子树, 所以这里的首要保证是调用方按时返回, 不再卡死整个批任务。
+        if proc.poll() is None:
             try:
-                proc.communicate(timeout=_KILL_DRAIN_TIMEOUT)
-            except subprocess.TimeoutExpired:
+                proc.kill()
+            except OSError:
                 pass
-            timeout_desc = f">{timeout:.0f}s" if timeout is not None else "超时"
-            return subprocess.CompletedProcess(
-                cmd, GIT_TIMEOUT_RETURNCODE, "", f"操作超时({timeout_desc}),已中止")
+
+        try:
+            proc.communicate(timeout=_KILL_DRAIN_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            # 不使用 ``with Popen``：它的 __exit__ 会再次无期限 wait()，抵消这里的
+            # 收尾超时。极端情况下主动关闭本进程持有的管道后返回约定超时结果。
+            if proc.stdout is not None:
+                proc.stdout.close()
+            if proc.stderr is not None:
+                proc.stderr.close()
+
+        timeout_desc = f">{timeout:.0f}s" if timeout is not None else "超时"
+        return subprocess.CompletedProcess(
+            cmd, GIT_TIMEOUT_RETURNCODE, "", f"操作超时({timeout_desc}),已中止")
 
 
 class GitRepo:

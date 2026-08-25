@@ -113,9 +113,11 @@ class SyncApp:
             sync_bar.advance(repo_path)
             return (a, None)
 
-        # 需要同步: 登记 push 超时用于卡住时倒计时(dry-run 不走网络, 不登记)
+        # push 有明确网络超时；pull 的 merge 是本地写操作，不能拿网络超时伪装成
+        # merge 的截止时间。无截止时间时进度条会显示仓库名和实际已用时间。
         timeout = None if args.timeout == 0 else args.timeout
-        sync_bar.register(repo_path, None if args.dry_run else timeout)
+        sync_timeout = timeout if args.mode == "push" and not args.dry_run else None
+        sync_bar.register(repo_path, sync_timeout)
         try:
             if args.mode == "pull":
                 result = ExecResult.pull(a, args.dry_run, args.force,

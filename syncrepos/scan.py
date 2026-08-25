@@ -14,7 +14,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, TypeVar
 
-SKIP_DIR_NAMES = {"node_modules", ".cache", "venv", ".venv", "__pycache__"}
+SKIP_DIR_NAMES = {
+    "node_modules", ".cache", "venv", ".venv", "__pycache__",
+    # 包管理器缓存和工具托管的 worktree/project 不是独立用户仓库，递归同步会重复
+    # 扫描同一份历史，甚至把本地路径 remote 当成真正的远程仓库。
+    ".pnpm-store", ".w", ".od",
+}
 
 T = TypeVar("T")
 
