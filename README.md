@@ -4,6 +4,22 @@
 
 递归扫描一个目录下的所有 git 仓库，并行 `fetch`，对比每个仓库本地分支与 `origin` / `upstream` 的领先/落后关系，先给出一张状态表和操作建议，确认后再统一执行拉取或推送。
 
+## GitHub 远程 fork 自动同步
+
+仓库内的 `.github/workflows/sync-upstream-forks.yml` 每天北京时间 04:37 在 GitHub Actions 上同步 `luck-gh` 名下的 fork，也支持在 Actions 页面手动运行。
+
+自动同步遵循以下安全边界：
+
+- fork 的默认分支只作为上游镜像，自己的功能提交放在 `feature/`、`agent/`、`codex/` 等独立分支；
+- 使用 `gh repo sync` 的默认 fast-forward 模式，不使用 `--force`；
+- 各 fork 独立执行，一个仓库失败不会取消其他仓库；
+- 无法 fast-forward 或出现冲突时任务失败，保留远程分支原状，交给人工处理；
+- 自动同步不访问任何本地 clone 或本地工作区。
+
+首次启用时，在本仓库的 GitHub `Settings > Secrets and variables > Actions` 中添加名为 `FORK_SYNC_TOKEN` 的 secret。建议使用只授权给清单内 fork、具备 Contents 写权限的 fine-grained personal access token。
+
+需要增删 fork 时，修改 workflow 中 `strategy.matrix.include` 的 `destination`、`source` 和 `branch`。其中 `destination` 是 `luck-gh` 下的 fork，`source` 是上游仓库，`branch` 是双方需要保持同步的默认分支。
+
 ## 特性
 
 - **一次扫一整个目录**：递归查找所有含 `.git` 的仓库，自动跳过 `node_modules`、`.venv`、`__pycache__` 等目录。

@@ -1,0 +1,58 @@
+name: Sync upstream forks
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "37 4 * * *"
+      timezone: "Asia/Shanghai"
+
+concurrency:
+  group: sync-upstream-forks
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: ${{ matrix.destination }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - destination: luck-gh/FlowPilot
+            source: QLHazyCoder/FlowPilot
+            branch: master
+          - destination: luck-gh/ImageHub
+            source: d100000/ImageHub
+            branch: main
+          - destination: luck-gh/new-api
+            source: QuantumNous/new-api
+            branch: main
+          - destination: luck-gh/obsidian-custom-attachment-location
+            source: mnaoumov/obsidian-custom-attachment-location
+            branch: main
+          - destination: luck-gh/obsidian-git
+            source: Vinzent03/obsidian-git
+            branch: master
+          - destination: luck-gh/outlookEmailPlus
+            source: ZeroPointSix/outlookEmailPlus
+            branch: main
+          - destination: luck-gh/OutlookRegister
+            source: LainsNL/OutlookRegister
+            branch: main
+          - destination: luck-gh/QRCodeTransceiver
+            source: xuesongjun/QRCodeTransceiver
+            branch: master
+          - destination: luck-gh/sub2api
+            source: Wei-Shaw/sub2api
+            branch: main
+
+    steps:
+      - name: Fast-forward fork from upstream
+        env:
+          GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
+        run: >-
+          gh repo sync "${{ matrix.destination }}"
+          --source "${{ matrix.source }}"
+          --branch "${{ matrix.branch }}"
+
