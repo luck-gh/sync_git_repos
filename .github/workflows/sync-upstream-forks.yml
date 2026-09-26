@@ -43,6 +43,9 @@ jobs:
           - destination: luck-gh/QRCodeTransceiver
             source: xuesongjun/QRCodeTransceiver
             branch: master
+          - destination: luck-gh/remote-mic-app-windows
+            source: GetSayAll/remote-mic-app-windows
+            branch: main
           - destination: luck-gh/sub2api
             source: Wei-Shaw/sub2api
             branch: main
@@ -51,8 +54,8 @@ jobs:
       - name: Fast-forward fork from upstream
         env:
           GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
-        run: >-
-          gh repo sync "${{ matrix.destination }}"
-          --source "${{ matrix.source }}"
-          --branch "${{ matrix.branch }}"
-
+        run: |
+          : "${GH_TOKEN:?FORK_SYNC_TOKEN is not configured}"
+          gh repo sync "${{ matrix.destination }}" \
+            --source "${{ matrix.source }}" \
+            --branch "${{ matrix.branch }}"

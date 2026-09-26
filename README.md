@@ -6,7 +6,7 @@
 
 ## GitHub 远程 fork 自动同步
 
-仓库内的 `.github/workflows/sync-upstream-forks.yml` 每天北京时间 04:37 在 GitHub Actions 上同步 `luck-gh` 名下的 fork，也支持在 Actions 页面手动运行。
+仓库内的 `.github/workflows/sync-upstream-forks.yml` 每天北京时间 04:37 在 GitHub Actions 上同步清单中的 `luck-gh` fork，也支持在 Actions 页面手动运行。
 
 自动同步遵循以下安全边界：
 
@@ -16,7 +16,7 @@
 - 无法 fast-forward 或出现冲突时任务失败，保留远程分支原状，交给人工处理；
 - 自动同步不访问任何本地 clone 或本地工作区。
 
-首次启用时，在本仓库的 GitHub `Settings > Secrets and variables > Actions` 中添加名为 `FORK_SYNC_TOKEN` 的 secret。建议使用只授权给清单内 fork、具备 Contents 写权限的 fine-grained personal access token。
+首次启用时，必须在本仓库的 GitHub `Settings > Secrets and variables > Actions` 中添加名为 `FORK_SYNC_TOKEN` 的 secret；缺少它时定时任务会失败，不能同步任何 fork。建议使用只授权给清单内 fork、具备 Contents 写权限的 fine-grained personal access token。新增 fork 时也要把它加入该 token 的仓库访问范围。
 
 需要增删 fork 时，修改 workflow 中 `strategy.matrix.include` 的 `destination`、`source` 和 `branch`。其中 `destination` 是 `luck-gh` 下的 fork，`source` 是上游仓库，`branch` 是双方需要保持同步的默认分支。
 
