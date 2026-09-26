@@ -20,6 +20,8 @@
 
 需要增删 fork 时，修改 workflow 中 `strategy.matrix.include` 的 `destination`、`source` 和 `branch`。其中 `destination` 是 `luck-gh` 下的 fork，`source` 是上游仓库，`branch` 是双方需要保持同步的默认分支。
 
+`luck-gh/remote-mic-app-windows` 不在自动同步清单内：该仓库保留 Windows 定制功能，上游更新由专用整合分支验证后经 PR 合入，不自动快进默认分支。
+
 ## 特性
 
 - **一次扫一整个目录**：递归查找所有含 `.git` 的仓库，自动跳过 `node_modules`、`.venv`、`__pycache__` 等目录。
